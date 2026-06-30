@@ -15,3 +15,8 @@ testfiles/
 tools/Contrast/contrast.jar
 tools/Contrast/contrast.yaml
 tools/Contrast/working/
+iast-tool/
+immunity-agent.jar
+benchmark-server.log
+benchmark-server.pid
+security/.env.local

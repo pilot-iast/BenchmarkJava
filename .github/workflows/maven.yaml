@@ -4,6 +4,7 @@ on: [push, pull_request]
 
 jobs:
   build:
+    if: false  # отключён — активен только iast-scan
 
     runs-on: ubuntu-latest
 
