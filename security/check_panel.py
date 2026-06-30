@@ -8,30 +8,12 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import requests
 
-
-def login(session: requests.Session, base_url: str, username: str, password: str) -> None:
-    root = base_url.rstrip("/")
-    session.get(f"{root}/", timeout=30)
-    resp = session.post(
-        f"{root}/api/v1/user/login",
-        json={"username": username, "password": password},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    body = resp.json()
-    if body.get("status") not in (201, 200):
-        raise RuntimeError(f"login failed: {body.get('msg')}")
-
-
-def csrf_headers(session: requests.Session) -> dict[str, str]:
-    token = session.cookies.get("csrftoken")
-    headers = {"Referer": session.headers.get("Referer", "")}
-    if token:
-        headers["X-CSRFToken"] = token
-    return headers
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from panel_client import csrf_headers, login
 
 
 def list_agents(session: requests.Session, base_url: str, project_name: str | None) -> list[dict]:

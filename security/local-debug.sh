@@ -91,8 +91,12 @@ echo "==> Crawl"
 echo "==> Wait for traces"
 sleep 30
 
-echo "==> Panel check"
-python3 -m pip install -q requests
-python3 "${ROOT}/security/check_panel.py"
+echo "==> Score IAST vs OWASP Benchmark"
+export PANEL_URL="${PANEL_URL:-${IAST_SERVER_URL}}"
+export PROJECT_VERSION="${VERSION}"
+python3 -m pip install -q -r "${ROOT}/security/requirements.txt"
+python3 "${ROOT}/security/score_iast_benchmark.py" \
+  --output-json "${ROOT}/scorecard-iast.json" \
+  --output-md "${ROOT}/scorecard-iast.md"
 
-echo "Done. Server log: ${SERVER_LOG}"
+echo "Done. Scorecard: ${ROOT}/scorecard-iast.md"

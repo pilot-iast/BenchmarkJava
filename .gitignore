@@ -19,4 +19,6 @@ iast-tool/
 immunity-agent.jar
 benchmark-server.log
 benchmark-server.pid
+scorecard-iast.json
+scorecard-iast.md
 security/.env.local

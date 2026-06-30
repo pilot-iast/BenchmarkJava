@@ -26,6 +26,7 @@ jobs:
           IAST_TOKEN: ${{ secrets.IAST_TOKEN }}
           IAST_PROJECT_NAME: ${{ vars.IAST_PROJECT_NAME }}
           IAST_TEMPLATE_ID: ${{ vars.IAST_TEMPLATE_ID }}
+          PROJECT_VERSION: run-${{ github.run_number }}
         run: |
           set -euo pipefail
           test -n "${IAST_SERVER_URL:-}" || { echo "IAST_SERVER_URL secret is required"; exit 1; }
@@ -33,7 +34,8 @@ jobs:
           server="${IAST_SERVER_URL%/}"
           project="${IAST_PROJECT_NAME:-benchmarkjava}"
           template_id="${IAST_TEMPLATE_ID:-2}"
-          version="run-${GITHUB_RUN_NUMBER}"
+          version="${PROJECT_VERSION}"
+          echo "PROJECT_VERSION=${version}" >> "${GITHUB_ENV}"
           mkdir -p iast-tool
           curl -fsSk -G \
             -H "Authorization: Token ${IAST_TOKEN}" \
@@ -109,20 +111,34 @@ jobs:
           grep -F 'io.immunity.iast.agent' benchmark-server.log target/cargo-output.log 2>/dev/null | tail -30 || true
           find /tmp -path '*/immunity-*/logs/*.log' -print -exec tail -n 60 {} \; 2>/dev/null || true
 
-      - name: Check panel (optional)
-        continue-on-error: true
+      - name: Score IAST vs OWASP Benchmark ground truth
         env:
           PANEL_URL: ${{ secrets.PANEL_URL }}
           PANEL_USER: ${{ secrets.PANEL_USER }}
           PANEL_PASS: ${{ secrets.PANEL_PASS }}
+          IAST_SERVER_URL: ${{ secrets.IAST_SERVER_URL }}
           IAST_PROJECT_NAME: ${{ vars.IAST_PROJECT_NAME }}
+          PROJECT_VERSION: ${{ env.PROJECT_VERSION }}
         run: |
+          set -euo pipefail
+          export PANEL_URL="${PANEL_URL:-${IAST_SERVER_URL:-}}"
           if [ -z "${PANEL_URL:-}" ] || [ -z "${PANEL_USER:-}" ] || [ -z "${PANEL_PASS:-}" ]; then
-            echo "Panel secrets not set — skipping"
-            exit 0
+            echo "PANEL_URL (or IAST_SERVER_URL), PANEL_USER, PANEL_PASS are required for scorecard" >&2
+            exit 1
           fi
-          python3 -m pip install -q requests
-          python3 security/check_panel.py
+          python3 -m pip install -q -r security/requirements.txt
+          python3 security/score_iast_benchmark.py \
+            --output-json scorecard-iast.json \
+            --output-md scorecard-iast.md
+
+      - name: Upload scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-iast
+          path: |
+            scorecard-iast.json
+            scorecard-iast.md
 
       - name: Upload logs
         if: always()
