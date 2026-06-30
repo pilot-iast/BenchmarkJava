@@ -74,13 +74,16 @@ done
 curl -kfsS "${BENCHMARK_BASE_URL}/" >/dev/null
 
 echo "==> Verify javaagent on Tomcat JVM"
-flags="$(jps -v | grep -F 'iast-tool/agent.jar' || true)"
+flags="$(jps -v | grep -F 'iast-tool/agent.jar' | grep -F 'Bootstrap' || true)"
 echo "${flags}"
 test -n "${flags}"
 if echo "${flags}" | grep -Fq 'org.codehaus.plexus.classworlds.launcher.Launcher'; then
   echo "ERROR: agent on Maven Launcher — registration will fail" >&2
   exit 1
 fi
+
+echo "==> Agent on Tomcat JVM; wait 30s for panel registration"
+sleep 30
 
 echo "==> Crawl"
 ./runCrawler.sh

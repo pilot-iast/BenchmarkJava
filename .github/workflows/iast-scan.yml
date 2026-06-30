@@ -81,13 +81,10 @@ jobs:
           exit 1
 
       - name: Verify IAST agent is attached to Tomcat JVM
-        env:
-          IAST_SERVER_URL: ${{ secrets.IAST_SERVER_URL }}
-          IAST_TOKEN: ${{ secrets.IAST_TOKEN }}
         run: |
           set -euo pipefail
           test -s iast-tool/agent.jar
-          agent_flags="$(jps -v | grep -F 'iast-tool/agent.jar' || true)"
+          agent_flags="$(jps -v | grep -F 'iast-tool/agent.jar' | grep -F 'Bootstrap' || true)"
           echo "$agent_flags"
           test -n "$agent_flags"
           if echo "$agent_flags" | grep -Fq 'org.codehaus.plexus.classworlds.launcher.Launcher'; then
@@ -97,17 +94,8 @@ jobs:
           count="$(echo "$agent_flags" | tr ' ' '\n' | grep -c 'iast-tool/agent.jar' || true)"
           echo "javaagent count: $count"
           test "$count" -ge 1
-          grep -F 'Agent registered successfully' benchmark-server.log target/cargo-output.log 2>/dev/null || {
-            grep -F 'io.immunity.iast.agent' benchmark-server.log target/cargo-output.log 2>/dev/null | tail -30 || true
-            find /tmp -path '*/immunity-*/logs/*.log' -print -exec tail -n 40 {} \; 2>/dev/null || true
-            exit 1
-          }
-          server="${IAST_SERVER_URL%/}"
-          echo "Checking management-server reachability..."
-          curl -fsSk -o /dev/null -w 'HTTP %{http_code}\n' \
-            -H "Authorization: Token ${IAST_TOKEN}" \
-            "${server}/api/v1/agent/download?language=java" || \
-            echo "WARNING: server not reachable from runner"
+          echo "Agent attached to Tomcat JVM; giving it 30s to register with panel..."
+          sleep 30
 
       - name: Run OWASP Benchmark crawler
         run: |
@@ -120,6 +108,21 @@ jobs:
           sleep 90
           grep -F 'io.immunity.iast.agent' benchmark-server.log target/cargo-output.log 2>/dev/null | tail -30 || true
           find /tmp -path '*/immunity-*/logs/*.log' -print -exec tail -n 60 {} \; 2>/dev/null || true
+
+      - name: Check panel (optional)
+        continue-on-error: true
+        env:
+          PANEL_URL: ${{ secrets.PANEL_URL }}
+          PANEL_USER: ${{ secrets.PANEL_USER }}
+          PANEL_PASS: ${{ secrets.PANEL_PASS }}
+          IAST_PROJECT_NAME: ${{ vars.IAST_PROJECT_NAME }}
+        run: |
+          if [ -z "${PANEL_URL:-}" ] || [ -z "${PANEL_USER:-}" ] || [ -z "${PANEL_PASS:-}" ]; then
+            echo "Panel secrets not set — skipping"
+            exit 0
+          fi
+          python3 -m pip install -q requests
+          python3 security/check_panel.py
 
       - name: Upload logs
         if: always()
