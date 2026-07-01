@@ -8,7 +8,7 @@ on:
 jobs:
   iast-crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
           # cannot drain the queue before CI stops Tomcat. Tune only for this pipeline.
           nohup mvn clean package cargo:run -Pdeploywimmunity \
             -D-Dorg.owasp.esapi.logSpecial.discard=true \
-            -Dcargo.jvmargs="-Xmx4G -javaagent:${PWD}/iast-tool/agent.jar -Dimmunity.pool.max.size=100" \
+            -Dcargo.jvmargs="-Xmx4G -javaagent:${PWD}/iast-tool/agent.jar -Dimmunity.pool.max.size=250" \
             > benchmark-server.log 2>&1 &
           echo $! > benchmark-server.pid
           echo "Started Maven cargo:run (pid $(cat benchmark-server.pid))"
@@ -111,8 +111,8 @@ jobs:
       - name: Wait for method pool upload
         run: |
           set -euo pipefail
-          echo "Waiting 15 minutes for agent to upload method pools (immunity.pool.max.size=100)..."
-          sleep 900
+          echo "Waiting 30 minutes for agent to upload method pools (immunity.pool.max.size=250)..."
+          sleep 1800
           grep -F 'io.immunity.iast.agent' benchmark-server.log target/cargo-output.log 2>/dev/null | tail -30 || true
           find /tmp -path '*/immunity-*/logs/*.log' -print -exec tail -n 60 {} \; 2>/dev/null || true
 
