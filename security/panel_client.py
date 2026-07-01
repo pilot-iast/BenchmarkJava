@@ -141,26 +141,73 @@ def find_version_id(
     return version_id
 
 
+def list_project_agents(
+    session: requests.Session,
+    base_url: str,
+    project_id: int,
+    *,
+    page_size: int = 100,
+) -> list[dict]:
+    """List agents bound to a project (v1 API)."""
+    root = base_url.rstrip("/")
+    resp = session.get(
+        f"{root}/api/v1/agents",
+        params={"bind_project_id": project_id, "pageSize": page_size},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    body = _check_api_response(resp, "agent list")
+    return list(body.get("data") or [])
+
+
+def resolve_run_agent_ids(agents: list[dict], version_id: int) -> list[int]:
+    """Agent ids for a CI run version; falls back to the highest agent id."""
+    matched = [
+        int(agent["id"])
+        for agent in agents
+        if int(agent.get("project_version") or 0) == int(version_id)
+    ]
+    if matched:
+        return sorted(matched)
+    if agents:
+        latest = max(agents, key=lambda agent: int(agent.get("id") or 0))
+        return [int(latest["id"])]
+    return []
+
+
 def iter_vulnerabilities(
     session: requests.Session,
     base_url: str,
     project_id: int,
     version_id: int,
     *,
+    project_name: str = "",
+    scope: str = "project",
     page_size: int = 200,
 ) -> Iterator[dict]:
-    """Fetch vulnerabilities via GET /api/v1/vulns."""
+    """Fetch vulnerabilities via GET /api/v1/vulns.
+
+    scope:
+      - project: all findings for project_name (recommended for OWASP Benchmark;
+        vulns are deduplicated at project level and stay on the first agent_id)
+      - version: findings whose agent_id belongs to the requested version only
+    """
     root = base_url.rstrip("/")
     page = 1
     while True:
+        params: dict[str, int | str] = {
+            "page": page,
+            "pageSize": page_size,
+        }
+        if scope == "version":
+            params["project_id"] = project_id
+            params["version_id"] = version_id
+        else:
+            params["project_name"] = (project_name or "").strip() or str(project_id)
+
         resp = session.get(
             f"{root}/api/v1/vulns",
-            params={
-                "page": page,
-                "pageSize": page_size,
-                "project_id": project_id,
-                "version_id": version_id,
-            },
+            params=params,
             timeout=120,
         )
         resp.raise_for_status()

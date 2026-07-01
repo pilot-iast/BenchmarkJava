@@ -19,9 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from panel_client import (
     find_project_id,
     iter_vulnerabilities,
+    list_project_agents,
     login,
     make_session,
     read_agent_properties,
+    resolve_run_agent_ids,
     resolve_version_id,
 )
 
@@ -55,6 +57,9 @@ class ScoreReport:
     iast_findings_total: int
     expected_vulnerable: int
     expected_safe: int
+    vuln_scope: str = "project"
+    run_agent_ids: list[int] = field(default_factory=list)
+    run_only_findings_total: int = 0
     tp: int = 0
     fn: int = 0
     fp: int = 0
@@ -90,6 +95,9 @@ class ScoreReport:
             "project_id": self.project_id,
             "version_id": self.version_id,
             "iast_findings_total": self.iast_findings_total,
+            "vuln_scope": self.vuln_scope,
+            "run_agent_ids": self.run_agent_ids,
+            "run_only_findings_total": self.run_only_findings_total,
             "expected_vulnerable": self.expected_vulnerable,
             "expected_safe": self.expected_safe,
             "tp": self.tp,
@@ -218,7 +226,7 @@ def score_cases(
                     "endpoint": case.endpoint or (hits[0].uri if hits else ""),
                     "cwe": case.cwe,
                     "iast_types": sorted({h.vul_type for h in hits if h.vul_type}),
-                    "uris": sorted({h.uri for h in hits if h.uri})[:5],
+                    "uris": sorted({h.uri for h in hits if h.uri}),
                 }
             )
         else:
@@ -227,13 +235,16 @@ def score_cases(
     return report
 
 
-def render_markdown(report: ScoreReport, *, max_items: int = 100) -> str:
+def render_markdown(report: ScoreReport) -> str:
     lines = [
         "# OWASP Benchmark × Immunity IAST scorecard",
         "",
         f"- **Project:** {report.project_name} (id={report.project_id})",
         f"- **Version:** {report.project_version} (id={report.version_id})",
-        f"- **IAST findings (raw):** {report.iast_findings_total}",
+        f"- **IAST findings (raw):** {report.iast_findings_total} "
+        f"(scope={report.vuln_scope})",
+        f"- **Run-only findings (version agent filter):** {report.run_only_findings_total} "
+        f"(agents={report.run_agent_ids or 'none'})",
         "",
         "## Summary",
         "",
@@ -259,8 +270,7 @@ def render_markdown(report: ScoreReport, *, max_items: int = 100) -> str:
             lines.append("_None_")
             lines.append("")
             return
-        shown = items[:max_items]
-        for row in shown:
+        for row in items:
             endpoint = row.get("endpoint") or (row.get("uris") or ["?"])[0]
             extra = ""
             if row.get("iast_types"):
@@ -269,8 +279,6 @@ def render_markdown(report: ScoreReport, *, max_items: int = 100) -> str:
                 f"- `{row['test']}` ({row['category']}, {row['expected']}) "
                 f"→ {endpoint}{extra}"
             )
-        if len(items) > max_items:
-            lines.append(f"- … and {len(items) - max_items} more")
         lines.append("")
 
     append_section("False negatives (missed planted vulnerabilities)", report.false_negatives)
@@ -284,15 +292,45 @@ def fetch_panel_vulnerabilities(
     password: str,
     project_name: str,
     version_name: str,
-) -> tuple[int, int, str, list[dict]]:
+    *,
+    scope: str = "project",
+) -> tuple[int, int, str, list[dict], list[int], int]:
     session = make_session(panel_url)
     login(session, panel_url, user, password)
     project_id = find_project_id(session, panel_url, project_name)
     version_id, resolved_version = resolve_version_id(
         session, panel_url, project_id, version_name
     )
-    vulns = list(iter_vulnerabilities(session, panel_url, project_id, version_id))
-    return project_id, version_id, resolved_version, vulns
+    agents = list_project_agents(session, panel_url, project_id)
+    run_agent_ids = resolve_run_agent_ids(agents, version_id)
+    run_only = list(
+        iter_vulnerabilities(
+            session,
+            panel_url,
+            project_id,
+            version_id,
+            project_name=project_name,
+            scope="version",
+        )
+    )
+    vulns = list(
+        iter_vulnerabilities(
+            session,
+            panel_url,
+            project_id,
+            version_id,
+            project_name=project_name,
+            scope=scope,
+        )
+    )
+    return (
+        project_id,
+        version_id,
+        resolved_version,
+        vulns,
+        run_agent_ids,
+        len(run_only),
+    )
 
 
 def main() -> int:
@@ -318,9 +356,14 @@ def main() -> int:
         default=str(root / "data" / "benchmark-crawler-http.xml"),
         help="Benchmark crawler XML for test endpoint URLs",
     )
+    parser.add_argument(
+        "--vuln-scope",
+        choices=("project", "version"),
+        default="project",
+        help="project=all deduplicated findings for the app; version=only agents of this run",
+    )
     parser.add_argument("--output-json", default="scorecard-iast.json")
     parser.add_argument("--output-md", default="scorecard-iast.md")
-    parser.add_argument("--max-md-items", type=int, default=100)
     args = parser.parse_args()
 
     panel_url = (args.panel_url or os.environ.get("IAST_SERVER_URL", "")).strip()
@@ -352,15 +395,26 @@ def main() -> int:
     urls = load_test_urls(Path(args.crawler_xml))
     attach_endpoints(cases, urls)
 
-    project_id, version_id, resolved_version, vulns = fetch_panel_vulnerabilities(
+    (
+        project_id,
+        version_id,
+        resolved_version,
+        vulns,
+        run_agent_ids,
+        run_only_total,
+    ) = fetch_panel_vulnerabilities(
         panel_url,
         user,
         password,
         project_name,
         project_version,
+        scope=args.vuln_scope,
     )
     found_tests, findings_by_test = collect_findings(vulns)
-    print(f"Fetched {len(vulns)} IAST findings for version {resolved_version!r}")
+    print(
+        f"Fetched {len(vulns)} IAST findings for version {resolved_version!r} "
+        f"(scope={args.vuln_scope}, run-only={run_only_total}, agents={run_agent_ids})"
+    )
     report = score_cases(
         cases,
         found_tests,
@@ -371,10 +425,13 @@ def main() -> int:
         version_id=version_id,
         iast_findings_total=len(vulns),
     )
+    report.vuln_scope = args.vuln_scope
+    report.run_agent_ids = run_agent_ids
+    report.run_only_findings_total = run_only_total
 
     payload = report.to_dict()
     Path(args.output_json).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    md = render_markdown(report, max_items=args.max_md_items)
+    md = render_markdown(report)
     Path(args.output_md).write_text(md, encoding="utf-8")
 
     print(md)
