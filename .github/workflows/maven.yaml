@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   build:
-    if: false  # отключён — активен только iast-scan
+    if: false  # отключён — IAST перенесён в BenchmarkPython
 
     runs-on: ubuntu-latest
 
