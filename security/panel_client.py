@@ -41,10 +41,16 @@ def login(session: requests.Session, base_url: str, username: str, password: str
 
 
 def csrf_headers(session: requests.Session) -> dict[str, str]:
-    token = session.cookies.get("csrftoken")
+    token = (
+        session.cookies.get("DTCsrfToken")
+        or session.cookies.get("csrftoken")
+        or session.cookies.get("CSRF-TOKEN")
+    )
     headers = {"Referer": session.headers.get("Referer", "")}
     if token:
         headers["X-CSRFToken"] = token
+        headers["csrf-token"] = token
+        headers["CSRF-TOKEN"] = token
     return headers
 
 
@@ -143,28 +149,27 @@ def iter_vulnerabilities(
     *,
     page_size: int = 200,
 ) -> Iterator[dict]:
+    """Fetch vulnerabilities via GET /api/v1/vulns."""
     root = base_url.rstrip("/")
     page = 1
     while True:
-        resp = session.post(
-            f"{root}/api/v2/app_vul_list_content",
-            json={
+        resp = session.get(
+            f"{root}/api/v1/vulns",
+            params={
                 "page": page,
-                "page_size": page_size,
-                "bind_project_id": project_id,
-                "project_version_id": version_id,
+                "pageSize": page_size,
+                "project_id": project_id,
+                "version_id": version_id,
             },
-            headers=csrf_headers(session),
             timeout=120,
         )
         resp.raise_for_status()
         body = _check_api_response(resp, "vulnerability list")
-        data = body.get("data") or {}
-        messages = data.get("messages") or []
-        if not messages:
+        items = body.get("data") or []
+        if not items:
             break
-        yield from messages
-        if len(messages) < page_size:
+        yield from items
+        if len(items) < page_size:
             break
         page += 1
 

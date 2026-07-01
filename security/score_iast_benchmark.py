@@ -154,13 +154,15 @@ def collect_findings(vulns: list[dict]) -> tuple[set[str], dict[str, list[Findin
     by_test: dict[str, list[Finding]] = defaultdict(list)
     for item in vulns:
         uri = str(item.get("uri") or item.get("url") or "")
-        test_name = extract_test_name(uri)
+        test_name = extract_test_name(uri) or extract_test_name(str(item.get("url") or ""))
         if not test_name:
             continue
         finding = Finding(
             test_name=test_name,
             uri=uri,
-            vul_type=str(item.get("strategy__vul_name") or item.get("type") or ""),
+            vul_type=str(
+                item.get("strategy__vul_name") or item.get("type") or item.get("vul_type") or ""
+            ),
             http_method=str(item.get("http_method") or ""),
             vul_id=item.get("id"),
         )
