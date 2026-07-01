@@ -13,7 +13,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from panel_client import csrf_headers, login
+from panel_client import csrf_headers, login, make_session
 
 
 def list_agents(session: requests.Session, base_url: str, project_name: str | None) -> list[dict]:
@@ -61,8 +61,7 @@ def main() -> int:
         print("Set PANEL_URL, PANEL_USER, PANEL_PASS (or pass flags)", file=sys.stderr)
         return 2
 
-    session = requests.Session()
-    session.headers["Referer"] = args.panel_url.rstrip("/") + "/"
+    session = make_session(args.panel_url)
     login(session, args.panel_url, args.user, args.password)
 
     agents = list_agents(session, args.panel_url, args.project_name)

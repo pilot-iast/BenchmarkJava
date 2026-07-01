@@ -18,9 +18,11 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from panel_client import (
     find_project_id,
-    find_version_id,
     iter_vulnerabilities,
     login,
+    make_session,
+    read_agent_properties,
+    resolve_version_id,
 )
 
 TEST_RE = re.compile(r"BenchmarkTest\d{5}")
@@ -280,14 +282,15 @@ def fetch_panel_vulnerabilities(
     password: str,
     project_name: str,
     version_name: str,
-) -> tuple[int, int, list[dict]]:
-    session = requests.Session()
-    session.headers["Referer"] = panel_url.rstrip("/") + "/"
+) -> tuple[int, int, str, list[dict]]:
+    session = make_session(panel_url)
     login(session, panel_url, user, password)
     project_id = find_project_id(session, panel_url, project_name)
-    version_id = find_version_id(session, panel_url, project_id, version_name)
+    version_id, resolved_version = resolve_version_id(
+        session, panel_url, project_id, version_name
+    )
     vulns = list(iter_vulnerabilities(session, panel_url, project_id, version_id))
-    return project_id, version_id, vulns
+    return project_id, version_id, resolved_version, vulns
 
 
 def main() -> int:
@@ -296,8 +299,13 @@ def main() -> int:
     parser.add_argument("--panel-url", default=os.environ.get("PANEL_URL", ""))
     parser.add_argument("--user", default=os.environ.get("PANEL_USER", ""))
     parser.add_argument("--password", default=os.environ.get("PANEL_PASS", ""))
-    parser.add_argument("--project-name", default=os.environ.get("IAST_PROJECT_NAME", "benchmarkjava"))
-    parser.add_argument("--project-version", default=os.environ.get("PROJECT_VERSION", ""))
+    parser.add_argument("--project-name", default="")
+    parser.add_argument("--project-version", default="")
+    parser.add_argument(
+        "--agent-jar",
+        default=str(root / "iast-tool" / "agent.jar"),
+        help="Fallback project name/version from baked iast.properties",
+    )
     parser.add_argument(
         "--expected",
         default=str(root / "expectedresults-1.2.csv"),
@@ -313,36 +321,50 @@ def main() -> int:
     parser.add_argument("--max-md-items", type=int, default=100)
     args = parser.parse_args()
 
-    panel_url = args.panel_url or os.environ.get("IAST_SERVER_URL", "")
-    if not panel_url or not args.user or not args.password:
+    panel_url = (args.panel_url or os.environ.get("IAST_SERVER_URL", "")).strip()
+    user = (args.user or os.environ.get("PANEL_USER", "")).strip()
+    password = args.password or os.environ.get("PANEL_PASS", "")
+    project_name = (args.project_name or os.environ.get("IAST_PROJECT_NAME") or "").strip()
+    project_version = (args.project_version or os.environ.get("PROJECT_VERSION") or "").strip()
+
+    agent_props = read_agent_properties(args.agent_jar)
+    if not project_name:
+        project_name = agent_props.get("project.name", "").strip()
+    if not project_name:
+        project_name = "benchmarkjava"
+    if not project_version:
+        project_version = agent_props.get("project.version", "").strip()
+
+    if not panel_url or not user or not password:
         print("Set PANEL_URL (or IAST_SERVER_URL), PANEL_USER, PANEL_PASS", file=sys.stderr)
         return 2
-    if not args.project_version:
+    if not project_version:
         print("Set PROJECT_VERSION (e.g. run-42 from agent download)", file=sys.stderr)
         return 2
 
+    print(
+        f"Panel={panel_url!r} verify_ssl={os.environ.get('PANEL_VERIFY_SSL', 'false')!r} "
+        f"project={project_name!r} version={project_version!r}"
+    )
     cases = load_expected(Path(args.expected))
     urls = load_test_urls(Path(args.crawler_xml))
     attach_endpoints(cases, urls)
 
-    print(
-        f"Fetching IAST vulns: project={args.project_name!r} "
-        f"version={args.project_version!r}"
-    )
-    project_id, version_id, vulns = fetch_panel_vulnerabilities(
+    project_id, version_id, resolved_version, vulns = fetch_panel_vulnerabilities(
         panel_url,
-        args.user,
-        args.password,
-        args.project_name,
-        args.project_version,
+        user,
+        password,
+        project_name,
+        project_version,
     )
     found_tests, findings_by_test = collect_findings(vulns)
+    print(f"Fetched {len(vulns)} IAST findings for version {resolved_version!r}")
     report = score_cases(
         cases,
         found_tests,
         findings_by_test,
-        project_name=args.project_name,
-        project_version=args.project_version,
+        project_name=project_name,
+        project_version=resolved_version,
         project_id=project_id,
         version_id=version_id,
         iast_findings_total=len(vulns),
@@ -359,4 +381,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        raise

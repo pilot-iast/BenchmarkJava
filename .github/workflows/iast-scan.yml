@@ -36,6 +36,7 @@ jobs:
           template_id="${IAST_TEMPLATE_ID:-2}"
           version="${PROJECT_VERSION}"
           echo "PROJECT_VERSION=${version}" >> "${GITHUB_ENV}"
+          echo "IAST_PROJECT_NAME=${project}" >> "${GITHUB_ENV}"
           mkdir -p iast-tool
           curl -fsSk -G \
             -H "Authorization: Token ${IAST_TOKEN}" \
@@ -117,11 +118,13 @@ jobs:
           PANEL_USER: ${{ secrets.PANEL_USER }}
           PANEL_PASS: ${{ secrets.PANEL_PASS }}
           IAST_SERVER_URL: ${{ secrets.IAST_SERVER_URL }}
-          IAST_PROJECT_NAME: ${{ vars.IAST_PROJECT_NAME }}
+          IAST_PROJECT_NAME: ${{ env.IAST_PROJECT_NAME }}
           PROJECT_VERSION: ${{ env.PROJECT_VERSION }}
+          PANEL_VERIFY_SSL: "false"
         run: |
           set -euo pipefail
           export PANEL_URL="${PANEL_URL:-${IAST_SERVER_URL:-}}"
+          export IAST_PROJECT_NAME="${IAST_PROJECT_NAME:-benchmarkjava}"
           if [ -z "${PANEL_URL:-}" ] || [ -z "${PANEL_USER:-}" ] || [ -z "${PANEL_PASS:-}" ]; then
             echo "PANEL_URL (or IAST_SERVER_URL), PANEL_USER, PANEL_PASS are required for scorecard" >&2
             exit 1
@@ -130,6 +133,8 @@ jobs:
           python3 security/score_iast_benchmark.py \
             --output-json scorecard-iast.json \
             --output-md scorecard-iast.md
+          test -s scorecard-iast.json
+          test -s scorecard-iast.md
 
       - name: Upload scorecard
         if: always()
