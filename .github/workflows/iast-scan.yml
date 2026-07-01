@@ -7,7 +7,6 @@ on:
 
 jobs:
   iast-crawl:
-    if: false  # отключён — активен iast-scan в BenchmarkPython
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
