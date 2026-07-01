@@ -18,6 +18,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from panel_client import (
     find_project_id,
+    is_noise_finding,
     iter_vulnerabilities,
     list_project_agents,
     login,
@@ -55,9 +56,9 @@ class ScoreReport:
     project_id: int
     version_id: int
     iast_findings_total: int
-    expected_vulnerable: int
-    expected_safe: int
-    vuln_scope: str = "project"
+    iast_findings_scored: int = 0
+    iast_findings_noise_excluded: int = 0
+    vuln_scope: str = "version"
     run_agent_ids: list[int] = field(default_factory=list)
     run_only_findings_total: int = 0
     tp: int = 0
@@ -66,6 +67,9 @@ class ScoreReport:
     tn: int = 0
     false_negatives: list[dict] = field(default_factory=list)
     false_positives: list[dict] = field(default_factory=list)
+    category_breakdown: dict[str, dict[str, int]] = field(default_factory=dict)
+    expected_vulnerable: int = 0
+    expected_safe: int = 0
 
     @property
     def recall_pct(self) -> float:
@@ -95,6 +99,8 @@ class ScoreReport:
             "project_id": self.project_id,
             "version_id": self.version_id,
             "iast_findings_total": self.iast_findings_total,
+            "iast_findings_scored": self.iast_findings_scored,
+            "iast_findings_noise_excluded": self.iast_findings_noise_excluded,
             "vuln_scope": self.vuln_scope,
             "run_agent_ids": self.run_agent_ids,
             "run_only_findings_total": self.run_only_findings_total,
@@ -108,6 +114,7 @@ class ScoreReport:
             "false_positive_rate_pct": round(self.false_positive_rate_pct, 2),
             "precision_pct": round(self.precision_pct, 2),
             "f1_score": round(self.f1_score, 4),
+            "category_breakdown": self.category_breakdown,
             "false_negatives": self.false_negatives,
             "false_positives": self.false_positives,
         }
@@ -179,6 +186,44 @@ def collect_findings(vulns: list[dict]) -> tuple[set[str], dict[str, list[Findin
     return found, by_test
 
 
+def filter_scored_findings(vulns: list[dict], *, exclude_noise: bool) -> tuple[list[dict], int]:
+    if not exclude_noise:
+        return vulns, 0
+    kept: list[dict] = []
+    excluded = 0
+    for item in vulns:
+        if is_noise_finding(item):
+            excluded += 1
+            continue
+        kept.append(item)
+    return kept, excluded
+
+
+def category_breakdown(
+    cases: dict[str, ExpectedCase],
+    found_tests: set[str],
+) -> dict[str, dict[str, int]]:
+    by_cat: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"expected_vuln": 0, "tp": 0, "fn": 0, "fp": 0, "tn": 0}
+    )
+    for name, case in cases.items():
+        row = by_cat[case.category]
+        if case.vulnerable:
+            row["expected_vuln"] += 1
+            if name in found_tests:
+                row["tp"] += 1
+            else:
+                row["fn"] += 1
+        elif name in found_tests:
+            row["fp"] += 1
+        else:
+            row["tn"] += 1
+    for row in by_cat.values():
+        denom = row["tp"] + row["fn"]
+        row["recall_pct"] = round(100.0 * row["tp"] / denom, 2) if denom else 0.0
+    return dict(sorted(by_cat.items()))
+
+
 def score_cases(
     cases: dict[str, ExpectedCase],
     found_tests: set[str],
@@ -232,6 +277,7 @@ def score_cases(
         else:
             report.tn += 1
 
+    report.category_breakdown = category_breakdown(cases, found_tests)
     return report
 
 
@@ -243,6 +289,8 @@ def render_markdown(report: ScoreReport) -> str:
         f"- **Version:** {report.project_version} (id={report.version_id})",
         f"- **IAST findings (raw):** {report.iast_findings_total} "
         f"(scope={report.vuln_scope})",
+        f"- **IAST findings (scored):** {report.iast_findings_scored} "
+        f"(noise excluded: {report.iast_findings_noise_excluded})",
         f"- **Run-only findings (version agent filter):** {report.run_only_findings_total} "
         f"(agents={report.run_agent_ids or 'none'})",
         "",
@@ -261,7 +309,17 @@ def render_markdown(report: ScoreReport) -> str:
         f"| Precision | {report.precision_pct:.2f}% |",
         f"| F1 | {report.f1_score:.4f} |",
         "",
+        "## Recall by OWASP category",
+        "",
+        "| Category | Expected vuln | TP | FN | FP | Recall % |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
+    for category, row in report.category_breakdown.items():
+        lines.append(
+            f"| {category} | {row['expected_vuln']} | {row['tp']} | {row['fn']} | "
+            f"{row['fp']} | {row['recall_pct']:.2f} |"
+        )
+    lines.extend(["",])
 
     def append_section(title: str, items: list[dict]) -> None:
         lines.append(f"## {title} ({len(items)})")
@@ -293,7 +351,8 @@ def fetch_panel_vulnerabilities(
     project_name: str,
     version_name: str,
     *,
-    scope: str = "project",
+    scope: str = "version",
+    exact_version: bool = False,
 ) -> tuple[int, int, str, list[dict], list[int], int]:
     session = make_session(panel_url)
     login(session, panel_url, user, password)
@@ -311,6 +370,7 @@ def fetch_panel_vulnerabilities(
             version_id,
             project_name=project_name,
             scope="version",
+            exact_version=True,
         )
     )
     vulns = list(
@@ -321,6 +381,7 @@ def fetch_panel_vulnerabilities(
             version_id,
             project_name=project_name,
             scope=scope,
+            exact_version=exact_version,
         )
     )
     return (
@@ -359,8 +420,20 @@ def main() -> int:
     parser.add_argument(
         "--vuln-scope",
         choices=("project", "version"),
-        default="project",
-        help="project=all deduplicated findings for the app; version=only agents of this run",
+        default="version",
+        help="version=findings for this CI run only (default); project=all open project findings",
+    )
+    parser.add_argument(
+        "--exact-version",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="score only findings first seen in this run (panel +N delta), not cumulative backlog",
+    )
+    parser.add_argument(
+        "--exclude-noise",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="drop header-policy and sensitive-info leaks before scoring (default: on)",
     )
     parser.add_argument("--output-json", default="scorecard-iast.json")
     parser.add_argument("--output-md", default="scorecard-iast.md")
@@ -409,11 +482,14 @@ def main() -> int:
         project_name,
         project_version,
         scope=args.vuln_scope,
+        exact_version=args.exact_version,
     )
-    found_tests, findings_by_test = collect_findings(vulns)
+    scored_vulns, noise_excluded = filter_scored_findings(vulns, exclude_noise=args.exclude_noise)
+    found_tests, findings_by_test = collect_findings(scored_vulns)
     print(
         f"Fetched {len(vulns)} IAST findings for version {resolved_version!r} "
-        f"(scope={args.vuln_scope}, run-only={run_only_total}, agents={run_agent_ids})"
+        f"(scope={args.vuln_scope}, scored={len(scored_vulns)}, "
+        f"noise_excluded={noise_excluded}, run-only={run_only_total}, agents={run_agent_ids})"
     )
     report = score_cases(
         cases,
@@ -428,6 +504,8 @@ def main() -> int:
     report.vuln_scope = args.vuln_scope
     report.run_agent_ids = run_agent_ids
     report.run_only_findings_total = run_only_total
+    report.iast_findings_scored = len(scored_vulns)
+    report.iast_findings_noise_excluded = noise_excluded
 
     payload = report.to_dict()
     Path(args.output_json).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

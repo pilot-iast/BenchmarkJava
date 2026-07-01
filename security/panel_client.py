@@ -7,6 +7,15 @@ from typing import Iterator
 
 import requests
 
+# Header / sensitive-info findings are not OWASP Benchmark planted categories.
+HEADER_VUL_NAMES = {
+    "Ответ с отключенным X-XSS-Protection",
+    "Response Without Content-Security-Policy Header",
+    "Response Without X-Content-Type-Options Header",
+    "Страницы без защиты от кликджекинга",
+}
+SENSITIVE_INFO_MARKERS = ("Утечка", "Leak", "Email Address", "ID Number", "Phone Number", "Token Or Secret")
+
 
 def make_session(panel_url: str) -> requests.Session:
     session = requests.Session()
@@ -161,18 +170,71 @@ def list_project_agents(
 
 
 def resolve_run_agent_ids(agents: list[dict], version_id: int) -> list[int]:
-    """Agent ids for a CI run version; falls back to the highest agent id."""
+    """Agent ids for a CI run version; when several agents share a version, keep the latest."""
     matched = [
         int(agent["id"])
         for agent in agents
         if int(agent.get("project_version") or 0) == int(version_id)
     ]
     if matched:
-        return sorted(matched)
+        return [max(matched)]
     if agents:
         latest = max(agents, key=lambda agent: int(agent.get("id") or 0))
         return [int(latest["id"])]
     return []
+
+
+def is_noise_finding(item: dict) -> bool:
+    """Header-policy and sensitive-info findings are not benchmark planted vulns."""
+    if str(item.get("is_header_vul", "")).lower() in ("1", "true", "yes"):
+        return True
+    name = str(item.get("strategy__vul_name") or item.get("type") or "")
+    if name in HEADER_VUL_NAMES:
+        return True
+    return any(marker in name for marker in SENSITIVE_INFO_MARKERS)
+
+
+def iter_vulnerabilities_v2(
+    session: requests.Session,
+    base_url: str,
+    project_id: int,
+    *,
+    project_version_id: int | None = None,
+    page_size: int = 200,
+) -> Iterator[dict]:
+    """Fetch all vulnerabilities via POST /api/v2/app_vul_list_content (paginated)."""
+    root = base_url.rstrip("/")
+    headers = {
+        **csrf_headers(session),
+        "Content-Type": "application/json",
+    }
+    page = 1
+    while True:
+        payload: dict[str, int] = {
+            "page": page,
+            "page_size": page_size,
+            "bind_project_id": project_id,
+        }
+        if project_version_id:
+            payload["project_version_id"] = project_version_id
+
+        resp = session.post(
+            f"{root}/api/v2/app_vul_list_content",
+            json=payload,
+            headers=headers,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        if body.get("status") not in (200, 201):
+            raise RuntimeError(f"vulnerability list failed: {body.get('msg')} (body={body!r})")
+        items = (body.get("data") or {}).get("messages") or []
+        if not items:
+            break
+        yield from items
+        if len(items) < page_size:
+            break
+        page += 1
 
 
 def iter_vulnerabilities(
@@ -182,43 +244,33 @@ def iter_vulnerabilities(
     version_id: int,
     *,
     project_name: str = "",
-    scope: str = "project",
+    scope: str = "version",
     page_size: int = 200,
+    exact_version: bool = False,
 ) -> Iterator[dict]:
-    """Fetch vulnerabilities via GET /api/v1/vulns.
+    """Fetch vulnerabilities for scoring.
 
     scope:
-      - project: all findings for project_name (recommended for OWASP Benchmark;
-        vulns are deduplicated at project level and stay on the first agent_id)
-      - version: findings whose agent_id belongs to the requested version only
-    """
-    root = base_url.rstrip("/")
-    page = 1
-    while True:
-        params: dict[str, int | str] = {
-            "page": page,
-            "pageSize": page_size,
-        }
-        if scope == "version":
-            params["project_id"] = project_id
-            params["version_id"] = version_id
-        else:
-            params["project_name"] = (project_name or "").strip() or str(project_id)
+      - version: cumulative backlog for bind_project_id + project_version_id
+        (matches the panel when a project version is selected)
+      - project: all open findings for the project
 
-        resp = session.get(
-            f"{root}/api/v1/vulns",
-            params=params,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        body = _check_api_response(resp, "vulnerability list")
-        items = body.get("data") or []
-        if not items:
-            break
-        yield from items
-        if len(items) < page_size:
-            break
-        page += 1
+    exact_version: only rows whose project_version_id equals version_id
+        (new in this run — e.g. +22 on the version card).
+    """
+    version_filter = version_id if scope == "version" else None
+    for item in iter_vulnerabilities_v2(
+        session,
+        base_url,
+        project_id,
+        project_version_id=version_filter,
+        page_size=page_size,
+    ):
+        if scope == "version" and exact_version:
+            item_version = int(item.get("project_version_id") or 0)
+            if item_version and item_version != int(version_id):
+                continue
+        yield item
 
 
 def read_agent_properties(agent_jar: str) -> dict[str, str]:

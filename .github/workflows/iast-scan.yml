@@ -135,6 +135,7 @@ jobs:
           fi
           python3 -m pip install -q -r security/requirements.txt
           python3 security/score_iast_benchmark.py \
+            --vuln-scope version \
             --output-json scorecard-iast.json \
             --output-md scorecard-iast.md
           test -s scorecard-iast.json
