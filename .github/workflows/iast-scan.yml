@@ -7,36 +7,92 @@ on:
 
 jobs:
   iast-crawl:
+    name: jdk${{ matrix.java-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    continue-on-error: ${{ matrix.continue-on-error }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - java-version: "8"
+            continue-on-error: false
+          - java-version: "9"
+            continue-on-error: true
+          - java-version: "10"
+            continue-on-error: true
+          - java-version: "11"
+            continue-on-error: false
+          - java-version: "12"
+            continue-on-error: true
+          - java-version: "13"
+            continue-on-error: true
+          - java-version: "14"
+            continue-on-error: true
+          - java-version: "15"
+            continue-on-error: true
+          - java-version: "16"
+            continue-on-error: true
+          - java-version: "17"
+            continue-on-error: false
+          - java-version: "18"
+            continue-on-error: true
+          - java-version: "19"
+            continue-on-error: true
+          - java-version: "20"
+            continue-on-error: true
+          - java-version: "21"
+            continue-on-error: false
+          - java-version: "22"
+            continue-on-error: true
+          - java-version: "23"
+            continue-on-error: true
+          - java-version: "24"
+            continue-on-error: true
+          - java-version: "25"
+            continue-on-error: true
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK ${{ matrix.java-version }}
         uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: ${{ matrix.java-version }}
           distribution: zulu
           cache: maven
+
+      - name: Resolve IAST project name
+        id: agent_meta
+        run: |
+          set -euo pipefail
+          jdk="${{ matrix.java-version }}"
+          base_project="${{ vars.IAST_PROJECT_NAME }}"
+          if [ -z "${base_project}" ]; then
+            base_project="benchmarkjava"
+          fi
+          project_name="${base_project}-jdk${jdk}"
+          project_version="run-${{ github.run_number }}"
+          echo "project_name=${project_name}" >> "${GITHUB_OUTPUT}"
+          echo "project_version=${project_version}" >> "${GITHUB_OUTPUT}"
+          echo "IAST_PROJECT_NAME=${project_name}" >> "${GITHUB_ENV}"
+          echo "PROJECT_VERSION=${project_version}" >> "${GITHUB_ENV}"
+          echo "Using project ${project_name} version ${project_version} (JDK ${jdk})"
 
       - name: Download IAST Java agent
         env:
           IAST_SERVER_URL: ${{ secrets.IAST_SERVER_URL }}
           IAST_TOKEN: ${{ secrets.IAST_TOKEN }}
-          IAST_PROJECT_NAME: ${{ vars.IAST_PROJECT_NAME }}
           IAST_TEMPLATE_ID: ${{ vars.IAST_TEMPLATE_ID }}
-          PROJECT_VERSION: run-${{ github.run_number }}
         run: |
           set -euo pipefail
           test -n "${IAST_SERVER_URL:-}" || { echo "IAST_SERVER_URL secret is required"; exit 1; }
           test -n "${IAST_TOKEN:-}" || { echo "IAST_TOKEN secret is required"; exit 1; }
           server="${IAST_SERVER_URL%/}"
-          project="${IAST_PROJECT_NAME:-benchmarkjava}"
+          project="${{ steps.agent_meta.outputs.project_name }}"
           template_id="${IAST_TEMPLATE_ID:-2}"
-          version="${PROJECT_VERSION}"
-          echo "PROJECT_VERSION=${version}" >> "${GITHUB_ENV}"
-          echo "IAST_PROJECT_NAME=${project}" >> "${GITHUB_ENV}"
+          version="${{ steps.agent_meta.outputs.project_version }}"
           mkdir -p iast-tool
           curl -fsSk -G \
             -H "Authorization: Token ${IAST_TOKEN}" \
@@ -68,7 +124,7 @@ jobs:
             -Dcargo.jvmargs="-Xmx4G -javaagent:${PWD}/iast-tool/agent.jar -Dimmunity.pool.max.size=250" \
             > benchmark-server.log 2>&1 &
           echo $! > benchmark-server.pid
-          echo "Started Maven cargo:run (pid $(cat benchmark-server.pid))"
+          echo "Started Maven cargo:run (pid $(cat benchmark-server.pid)) on JDK ${{ matrix.java-version }}"
 
       - name: Wait for application
         run: |
@@ -122,39 +178,40 @@ jobs:
           PANEL_USER: ${{ secrets.PANEL_USER }}
           PANEL_PASS: ${{ secrets.PANEL_PASS }}
           IAST_SERVER_URL: ${{ secrets.IAST_SERVER_URL }}
-          IAST_PROJECT_NAME: ${{ env.IAST_PROJECT_NAME }}
-          PROJECT_VERSION: ${{ env.PROJECT_VERSION }}
+          IAST_PROJECT_NAME: ${{ steps.agent_meta.outputs.project_name }}
+          PROJECT_VERSION: ${{ steps.agent_meta.outputs.project_version }}
           PANEL_VERIFY_SSL: "false"
         run: |
           set -euo pipefail
           export PANEL_URL="${PANEL_URL:-${IAST_SERVER_URL:-}}"
-          export IAST_PROJECT_NAME="${IAST_PROJECT_NAME:-benchmarkjava}"
           if [ -z "${PANEL_URL:-}" ] || [ -z "${PANEL_USER:-}" ] || [ -z "${PANEL_PASS:-}" ]; then
             echo "PANEL_URL (or IAST_SERVER_URL), PANEL_USER, PANEL_PASS are required for scorecard" >&2
             exit 1
           fi
           python3 -m pip install -q -r security/requirements.txt
           python3 security/score_iast_benchmark.py \
+            --project-name "${{ steps.agent_meta.outputs.project_name }}" \
+            --project-version "${{ steps.agent_meta.outputs.project_version }}" \
             --vuln-scope version \
-            --output-json scorecard-iast.json \
-            --output-md scorecard-iast.md
-          test -s scorecard-iast.json
-          test -s scorecard-iast.md
+            --output-json "scorecard-iast-jdk${{ matrix.java-version }}.json" \
+            --output-md "scorecard-iast-jdk${{ matrix.java-version }}.md"
+          test -s "scorecard-iast-jdk${{ matrix.java-version }}.json"
+          test -s "scorecard-iast-jdk${{ matrix.java-version }}.md"
 
       - name: Upload scorecard
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scorecard-iast
+          name: scorecard-iast-jdk${{ matrix.java-version }}
           path: |
-            scorecard-iast.json
-            scorecard-iast.md
+            scorecard-iast-jdk${{ matrix.java-version }}.json
+            scorecard-iast-jdk${{ matrix.java-version }}.md
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: iast-scan-logs
+          name: iast-scan-logs-jdk${{ matrix.java-version }}
           path: |
             benchmark-server.log
             target/cargo-output.log
