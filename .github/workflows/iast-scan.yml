@@ -35,31 +35,18 @@ jobs:
             continue-on-error: true
           - java-version: "17"
             continue-on-error: false
-          - java-version: "18"
-            continue-on-error: true
-          - java-version: "19"
-            continue-on-error: true
-          - java-version: "20"
-            continue-on-error: true
-          - java-version: "21"
-            continue-on-error: false
-          - java-version: "22"
-            continue-on-error: true
-          - java-version: "23"
-            continue-on-error: true
-          - java-version: "24"
-            continue-on-error: true
-          - java-version: "25"
-            continue-on-error: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK ${{ matrix.java-version }}
+      # Maven/BenchmarkUtils stay on JDK 17; Tomcat uses matrix JDK via cargo.java.home.
+      - name: Set up JDK 17 (Maven) and JDK ${{ matrix.java-version }} (Tomcat)
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ matrix.java-version }}
+          java-version: |
+            ${{ matrix.java-version }}
+            17
           distribution: zulu
           cache: maven
 
@@ -73,12 +60,12 @@ jobs:
             base_project="benchmarkjava"
           fi
           project_name="${base_project}-jdk${jdk}"
-          project_version="run-${{ github.run_number }}"
+          project_version="run-${{ github.run_number }}-jdk${jdk}"
           echo "project_name=${project_name}" >> "${GITHUB_OUTPUT}"
           echo "project_version=${project_version}" >> "${GITHUB_OUTPUT}"
           echo "IAST_PROJECT_NAME=${project_name}" >> "${GITHUB_ENV}"
           echo "PROJECT_VERSION=${project_version}" >> "${GITHUB_ENV}"
-          echo "Using project ${project_name} version ${project_version} (JDK ${jdk})"
+          echo "Using application ${project_name} version ${project_version} (runtime JDK ${jdk})"
 
       - name: Download IAST Java agent
         env:
@@ -111,18 +98,40 @@ jobs:
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/OWASP-Benchmark/BenchmarkUtils.git /tmp/BenchmarkUtils
-          mvn -f /tmp/BenchmarkUtils/pom.xml install -DskipTests -q
+          mvn -f /tmp/BenchmarkUtils/pom.xml install \
+            -DskipTests \
+            -Dspotless.apply.skip=true \
+            -Dspotless.check.skip=true \
+            -q
+
+      - name: Build Benchmark WAR
+        run: |
+          set -euo pipefail
+          mvn initialize -q
+          mvn clean package -Pdeploywimmunity -DskipTests -q
 
       - name: Start Benchmark with IAST agent
         run: |
           set -euo pipefail
-          mvn initialize -q
+          runtime_var="JAVA_HOME_${{ matrix.java-version }}_X64"
+          runtime_home="${!runtime_var}"
+          test -n "${runtime_home}"
+          test -d "${runtime_home}"
+          echo "Maven JAVA_HOME=${JAVA_HOME}"
+          echo "Tomcat ${runtime_var}=${runtime_home}"
+          "${runtime_home}/bin/java" -version
           # Benchmark crawl generates ~2700 method pool reports; default upload pool (10 threads)
           # cannot drain the queue before CI stops Tomcat. Tune only for this pipeline.
-          nohup mvn clean package cargo:run -Pdeploywimmunity \
+          nohup mvn cargo:run -Pdeploywimmunity \
+            -Dmaven.test.skip=true \
+            -Dmaven.compile.skip=true \
+            -Dmaven.resources.skip=true \
+            -Dmaven.package.skip=true \
+            -Dcargo.java.home="${runtime_home}" \
             -D-Dorg.owasp.esapi.logSpecial.discard=true \
             -Dcargo.jvmargs="-Xmx4G -javaagent:${PWD}/iast-tool/agent.jar -Dimmunity.pool.max.size=250" \
             > benchmark-server.log 2>&1 &
+          echo "${runtime_home}" > runtime-java-home.txt
           echo $! > benchmark-server.pid
           echo "Started Maven cargo:run (pid $(cat benchmark-server.pid)) on JDK ${{ matrix.java-version }}"
 
@@ -146,7 +155,8 @@ jobs:
         run: |
           set -euo pipefail
           test -s iast-tool/agent.jar
-          agent_flags="$(jps -v | grep -F 'iast-tool/agent.jar' | grep -F 'Bootstrap' || true)"
+          runtime_home="$(cat runtime-java-home.txt)"
+          agent_flags="$("${runtime_home}/bin/jps" -v | grep -F 'iast-tool/agent.jar' | grep -F 'Bootstrap' || true)"
           echo "$agent_flags"
           test -n "$agent_flags"
           if echo "$agent_flags" | grep -Fq 'org.codehaus.plexus.classworlds.launcher.Launcher'; then
