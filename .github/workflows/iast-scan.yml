@@ -15,26 +15,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - java-version: "8"
-            continue-on-error: false
-          - java-version: "9"
-            continue-on-error: true
-          - java-version: "10"
-            continue-on-error: true
-          - java-version: "11"
-            continue-on-error: false
-          - java-version: "12"
-            continue-on-error: true
-          - java-version: "13"
-            continue-on-error: true
-          - java-version: "14"
-            continue-on-error: true
-          - java-version: "15"
-            continue-on-error: true
-          - java-version: "16"
-            continue-on-error: true
           - java-version: "17"
             continue-on-error: false
+          - java-version: "18"
+            continue-on-error: true
+          - java-version: "19"
+            continue-on-error: true
+          - java-version: "20"
+            continue-on-error: true
+          - java-version: "21"
+            continue-on-error: false
+          - java-version: "22"
+            continue-on-error: true
+          - java-version: "23"
+            continue-on-error: true
+          - java-version: "24"
+            continue-on-error: true
+          - java-version: "25"
+            continue-on-error: true
 
     steps:
       - name: Checkout
