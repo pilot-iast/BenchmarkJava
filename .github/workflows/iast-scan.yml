@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Maven/BenchmarkUtils stay on JDK 17; Tomcat uses matrix JDK via cargo.java.home.
       - name: Set up JDK 17 (Maven) and JDK ${{ matrix.java-version }} (Tomcat)
