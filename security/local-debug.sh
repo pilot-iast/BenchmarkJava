@@ -50,6 +50,7 @@ unzip -p "${AGENT_JAR}" iast.properties | grep -E '^(iast\.server\.|engine\.|pro
 
 echo "==> Install BenchmarkUtils crawler plugin (if missing)"
 if ! mvn -Dplugin=org.owasp:benchmarkutils-maven-plugin help:describe >/dev/null 2>&1; then
+  rm -rf /tmp/BenchmarkUtils
   git clone --depth 1 https://github.com/OWASP-Benchmark/BenchmarkUtils.git /tmp/BenchmarkUtils
   mvn -f /tmp/BenchmarkUtils/pom.xml install -DskipTests -q
 fi
@@ -88,8 +89,8 @@ sleep 30
 echo "==> Crawl"
 ./runCrawler.sh
 
-echo "==> Wait for traces"
-sleep 30
+echo "==> Wait for traces (15 min for method pool upload, pool.max.size=300)"
+sleep 900
 
 echo "==> Score IAST vs OWASP Benchmark"
 export PANEL_URL="${PANEL_URL:-${IAST_SERVER_URL}}"

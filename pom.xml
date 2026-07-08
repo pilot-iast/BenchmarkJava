@@ -691,6 +691,7 @@
                                     <cargo.jvmargs>
                                         -Xmx4G
                                         -javaagent:${basedir}/iast-tool/agent.jar
+                                        -Dimmunity.pool.max.size=300
                                     </cargo.jvmargs>
                                     <cargo.servlet.port>8443</cargo.servlet.port>
                                     <cargo.protocol>https</cargo.protocol>
