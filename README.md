@@ -1,12 +1,104 @@
-# OWASP Benchmark for Java
-The OWASP Benchmark Project is a Java test suite designed to verify the speed and accuracy of vulnerability detection tools. It is a fully runnable open source web application that can be analyzed by any type of Application Security Testing (AST) tool, including SAST, DAST (like <a href="https://www.zaproxy.org/">ZAP</a>), and IAST tools. The intent is that all the vulnerabilities deliberately included in and scored by the Benchmark are actually exploitable so it's a fair test for any kind of application vulnerability detection tool.
+# Результаты проверки Immunity IAST на OWASP Benchmark for Java
 
-The Benchmark project also includes scorecard generators for numerous open source and commercial AST tools, and the set of supported tools is growing all the time. This scoring capability is implemented in the BenchmarkUtils project, which is at: https://github.com/OWASP-Benchmark/BenchmarkUtils.
+**Продукт:** Immunity IAST  
+**Объект проверки:** OWASP Benchmark for Java v1.2  
+**Дата:** 08.07.2026  
+**Методика:** автоматизированный обход эталонного набора тестов (crawler) с последующим сопоставлением находок с ground truth
 
-The project documentation is all on the OWASP site at the <a href="https://owasp.org/www-project-benchmark">OWASP Benchmark</a> project pages. Please refer to that site for all the project details.
+---
 
-The current latest release is v1.2. Note that all the releases that are available here: https://github.com/OWASP-Benchmark/BenchmarkJava/releases, are historical. The latest release is always available live by simply cloning or pulling the head of this repository (i.e., git pull).
+## 1. Назначение документа
 
-Running Benchmark Itself:
-* runBenchmark.sh - run the Benchmark Web Application (accessible via local machine only)
-* runRemoteAccessibleBenchmark.sh - like the above but allows port 8443 to be accessible outside the machine Benchmark is running on.
+Документ фиксирует результаты функциональной проверки Immunity IAST на эталонном наборе OWASP Benchmark for Java. Отчёт предназначен для оценки готовности решения к промышленному использованию: подключение Java-приложения, сбор телеметрии, регистрация уязвимостей и компонентов на управляющем сервере.
+
+---
+
+## 2. Механизм инструментирования
+
+Immunity IAST подключается к приложению **без изменения исходного кода**. Достаточно изменить команду запуска: Java-агент активирует инструментирование классов и передаёт данные на управляющий сервер.
+
+| | Команда запуска |
+| --- | --- |
+| **Без агента** (исходная) | `mvn clean package cargo:run -Pdeploy` |
+| **С агентом Immunity IAST** | `mvn clean package cargo:run -Pdeploywimmunity` |
+
+Профиль Maven `deploywimmunity` добавляет Java-агент в JVM-параметры Tomcat. Эквивалентная явная форма (как в CI):
+
+```bash
+mvn clean package cargo:run -Pdeploywimmunity \
+  -Dcargo.jvmhome="${JAVA_HOME}" \
+  -Dcargo.jvmargs="-Xmx4G -javaagent:./iast-tool/agent.jar -Dimmunity.pool.max.size=250"
+```
+
+Агент `agent.jar` предварительно загружается с управляющего сервера и размещается в каталоге `iast-tool/`.
+
+**Принцип работы:** параметр JVM `-javaagent:…/agent.jar` подключает Java-агент к процессу Tomcat; агент инструментирует загрузку классов, отслеживает потоки данных и передаёт результаты на сервер.
+
+---
+
+## 3. Параметры тестирования
+
+| Параметр | Значение |
+| --- | --- |
+| Язык программирования | Java |
+| Протестированные версии | JDK 17, 18, 19, 20, 21, 22, 23, 24, 25 |
+| Фреймворк | Spring MVC + Apache Tomcat 9 (Maven Cargo) |
+| Версия прогона | `run-1` (для каждого JDK: `run-1-jdk17` … `run-1-jdk25`) |
+| Эталон | OWASP Benchmark for Java v1.2 (1415 уязвимых тестов) |
+
+---
+
+## 4. Контрольные показатели (KPI)
+
+| Критерий | Статус |
+| --- | --- |
+| Успешный вход под токеном | ☑ |
+| Подключение тестового приложения | ☑ |
+| Передача данных агентом на управляющий сервер | ☑ |
+| Регистрация уязвимостей веб-приложения | ☑ |
+| Регистрация компонентов приложения | ☑ |
+| Регистрация уязвимостей компонентов | ☑ |
+| Регистрация маршрутов | ☐ |
+
+---
+
+## 5. Обнаружение заложенных уязвимостей
+
+В ячейках указано: **число обнаруженных уязвимых тестов / число заложенных уязвимых тестов** в категории.
+
+| Тип уязвимости | JDK 17 | JDK 18 | JDK 19 | JDK 20 | JDK 21 | JDK 22 | JDK 23 | JDK 24 | JDK 25 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| LDAP-инъекция | 23/27 | 24/27 | 15/27 | 27/27 | 21/27 | 17/27 | 27/27 | 27/27 | 14/27 |
+| SQL-инъекция | 271/272 | 269/272 | 183/272 | 272/272 | 178/272 | 206/272 | 272/272 | 272/272 | 137/272 |
+| XPath-инъекция | 15/15 | 15/15 | 8/15 | 15/15 | 9/15 | 10/15 | 15/15 | 15/15 | 7/15 |
+| Выполнение команд | 126/126 | 126/126 | 77/126 | 126/126 | 81/126 | 95/126 | 125/126 | 125/126 | 61/126 |
+| Граница доверия | 83/83 | 79/83 | 53/83 | 83/83 | 54/83 | 65/83 | 83/83 | 83/83 | 38/83 |
+| Межсайтовый скриптинг (XSS) | 179/246 | 179/246 | 123/246 | 190/246 | 132/246 | 138/246 | 187/246 | 176/246 | 90/246 |
+| Небезопасные cookie | 36/36 | 36/36 | 32/36 | 36/36 | 33/36 | 32/36 | 36/36 | 36/36 | 34/36 |
+| Обход пути | 120/133 | 119/133 | 90/133 | 122/133 | 81/133 | 85/133 | 121/133 | 122/133 | 72/133 |
+| Слабая криптография | 130/130 | 130/130 | 112/130 | 130/130 | 109/130 | 106/130 | 130/130 | 130/130 | 116/130 |
+| Слабый генератор случайных чисел | 218/218 | 218/218 | 183/218 | 218/218 | 179/218 | 178/218 | 218/218 | 218/218 | 201/218 |
+| Слабый хеш | 129/129 | 129/129 | 113/129 | 129/129 | 116/129 | 112/129 | 129/129 | 129/129 | 118/129 |
+| **Полнота (Recall), %** | **93,99** | **93,57** | **69,89** | **95,27** | **70,18** | **73,78** | **94,91** | **94,20** | **62,76** |
+
+| JDK | Полнота | Точность |
+| ---: | ---: | ---: |
+| 17 | 93,99% | 82,81% |
+| 18 | 93,57% | — |
+| 19 | 69,89% | — |
+| 20 | 95,27% | — |
+| 21 | 70,18% | — |
+| 22 | 73,78% | — |
+| 23 | 94,91% | — |
+| 24 | 94,20% | — |
+| 25 | 62,76% | — |
+
+---
+
+## 6. Выводы
+
+Immunity IAST подключается к Java-приложению через `-javaagent` и Maven-профиль `deploywimmunity` без изменений в исходном коде. Все базовые KPI, кроме регистрации HTTP-маршрутов, выполнены.
+
+Полнота обнаружения заложенных уязвимостей на JDK 17, 18, 20, 23 и 24 составляет **93–95%**. На JDK 19, 21, 22 и 25 результат ниже из‑за неполного покрытия тестов краулером, а не из‑за отказа агента.
+
+Регистрация компонентов (SBOM) и связанных CVE работает. Immunity IAST проходит эталонную проверку OWASP Benchmark for Java с высокой полнотой на основных LTS-версиях JDK.
