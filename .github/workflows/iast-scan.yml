@@ -40,7 +40,7 @@ jobs:
 
       # Maven/BenchmarkUtils stay on JDK 17; Tomcat uses matrix JDK via cargo.java.home.
       - name: Set up JDK 17 (Maven) and JDK ${{ matrix.java-version }} (Tomcat)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: |
             ${{ matrix.java-version }}
